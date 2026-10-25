@@ -4,7 +4,7 @@
 
 **Status:** working, in daily use. Verified end-to-end on 23 October 2026: screenshot → shake → drop into hole → drag into terminal → Claude reads the file.
 **Version / date:** 1.0 · handoff written 23 October 2026, updated 24 October 2026.
-**Repo:** https://github.com/dimjer/Shake-it-up-and-toss-it-in (rename to `Toss` pending) (public, `main`)
+**Repo:** https://github.com/dimjer/Toss (public, `main`; formerly `Shake-it-up-and-toss-it-in`, GitHub redirects the old URL)
 **Owner:** Dima · built with Claude Code.
 
 ---
