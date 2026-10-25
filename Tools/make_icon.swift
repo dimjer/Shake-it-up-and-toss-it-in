@@ -7,7 +7,7 @@ func rgb(_ hex: UInt32) -> NSColor {
             blue: CGFloat(hex & 0xFF) / 255, alpha: 1)
 }
 
-// Same top-down sprite as the app (Sources/main.swift, `Kitten.sprite`).
+// Same top-down sprite as the app (Sources/KittenStyle.swift, `Kitten.sprite`).
 let kitten = [
     "...O.....O....",
     "..OBO...OBO...",
