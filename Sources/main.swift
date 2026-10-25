@@ -1,5 +1,5 @@
-// Toss — shake the mouse, a black hole opens, drop files on it,
-// then drag them from the shelf into the terminal (or anywhere else).
+// Toss — shake the mouse, a kitten basket pops up, drop files on it: every file
+// becomes a pixel kitten (coat = file type). Drag kittens into the terminal (or anywhere else).
 // Dropped files are COPIED into a persistent stash, so screenshots that macOS
 // deletes from its temp location stay available.
 
@@ -160,7 +160,7 @@ final class ShakeDetector {
     }
 }
 
-// MARK: - Drag source base (orbiting files and the hole core)
+// MARK: - Drag source base (kittens and the basket)
 
 class FileDragSource: NSView, NSDraggingSource {
     var urls: [URL] = []
@@ -231,135 +231,341 @@ class FileDragSource: NSView, NSDraggingSource {
     @objc private func removeItems() { urls.forEach { Store.shared.remove($0) } }
 }
 
-/// A file captured in orbit around the hole: round thumbnail, extension badge, name below.
-final class OrbitTile: FileDragSource {
-    static let labelH: CGFloat = 14
-    let side: CGFloat
-    private let imageLayer = CALayer()
+// MARK: - Pixel art: kittens and the basket, seen from above
 
-    init(url: URL, side: CGFloat, width: CGFloat) {
-        self.side = side
-        super.init(frame: NSRect(x: 0, y: 0, width: width, height: side + Self.labelH))
-        urls = [url]
-        toolTip = url.lastPathComponent
-        wantsLayer = true
-        let amber = NSColor(srgbRed: 1, green: 0.75, blue: 0.4, alpha: 1)
+func rgb(_ hex: UInt32, _ a: CGFloat = 1) -> NSColor {
+    NSColor(srgbRed: CGFloat(hex >> 16 & 0xFF) / 255, green: CGFloat(hex >> 8 & 0xFF) / 255,
+            blue: CGFloat(hex & 0xFF) / 255, alpha: a)
+}
 
-        let holder = CALayer()
-        holder.frame = CGRect(x: (width - side) / 2, y: Self.labelH, width: side, height: side)
-        holder.shadowColor = NSColor(srgbRed: 1, green: 0.55, blue: 0.15, alpha: 1).cgColor
-        holder.shadowOpacity = 0.9
-        holder.shadowRadius = 8
-        holder.shadowOffset = .zero
-        layer?.addSublayer(holder)
+extension NSImage {
+    /// Rendered at 1x; layers upscale it with `.nearest`, so pixels stay sharp.
+    var cg: CGImage? { cgImage(forProposedRect: nil, context: nil, hints: nil) }
+}
 
-        imageLayer.frame = holder.bounds
-        imageLayer.cornerRadius = side / 2
-        imageLayer.masksToBounds = true
-        imageLayer.contentsGravity = .resizeAspectFill
-        imageLayer.backgroundColor = NSColor(white: 0.08, alpha: 1).cgColor
-        imageLayer.borderWidth = 1.5
-        imageLayer.borderColor = amber.withAlphaComponent(0.9).cgColor
-        holder.addSublayer(imageLayer)
+/// Every kind of file gets its own kitten coat.
+struct Coat {
+    var name: String
+    var body: NSColor
+    var paws: NSColor
+    var eye: NSColor
+    var outline = rgb(0x2B1C19)
+    var stripes: NSColor? = nil
+    var points: NSColor? = nil      // siamese: ears, mask and tail
+    var patches: [NSColor] = []     // calico: [ginger, black]
 
-        let ext = url.pathExtension.uppercased()
-        if !ext.isEmpty {
-            let badge = CATextLayer()
-            badge.string = ext
-            badge.font = NSFont.monospacedSystemFont(ofSize: 7, weight: .bold)
-            badge.fontSize = 7
-            badge.alignmentMode = .center
-            badge.foregroundColor = NSColor.black.cgColor
-            badge.backgroundColor = amber.cgColor
-            badge.contentsScale = 2
-            let bw = CGFloat(ext.count) * 5 + 8
-            badge.frame = CGRect(x: side - bw + 4, y: -2, width: bw, height: 11)
-            badge.cornerRadius = 5.5
-            holder.addSublayer(badge)
+    static let ginger    = Coat(name: "рыжий полосатый · картинка", body: rgb(0xF2A65A), paws: rgb(0xFFE3C2), eye: rgb(0x6FBF5F), stripes: rgb(0xD0702A))
+    static let tuxedo    = Coat(name: "чёрный во фраке · PDF", body: rgb(0x34313A), paws: rgb(0xF5F1EA), eye: rgb(0xF2D45C), outline: rgb(0x121015))
+    static let snowy     = Coat(name: "белый · текст", body: rgb(0xF7F4EE), paws: rgb(0xFBE4EA), eye: rgb(0x5FA8E0), outline: rgb(0x5E514B))
+    static let greyTabby = Coat(name: "серый полосатый · код", body: rgb(0x9CA3AD), paws: rgb(0xDADEE3), eye: rgb(0xF2C14E), stripes: rgb(0x5D646E))
+    static let siamese   = Coat(name: "сиамский · видео", body: rgb(0xF3E3C7), paws: rgb(0xFBF2E2), eye: rgb(0x4F9FE6), points: rgb(0x6B4A3A))
+    static let calico    = Coat(name: "трёхцветный · музыка", body: rgb(0xFBF7F0), paws: rgb(0xFFFFFF), eye: rgb(0x6FBF5F), patches: [rgb(0xE8913A), rgb(0x3A3437)])
+    static let chocolate = Coat(name: "шоколадный · архив", body: rgb(0x8A5A3C), paws: rgb(0xC9A07E), eye: rgb(0xF2C14E), stripes: rgb(0x6A4129))
+    static let blue      = Coat(name: "русский голубой · папка", body: rgb(0x7F8FA6), paws: rgb(0xAAB7C9), eye: rgb(0x63C463))
+    static let pink      = Coat(name: "розовый · дизайн", body: rgb(0xF4A7C0), paws: rgb(0xFFE0EA), eye: rgb(0x9B7BE0))
+    static let cream     = Coat(name: "кремовый · другое", body: rgb(0xE9D3A8), paws: rgb(0xF8EBD2), eye: rgb(0x6FBF5F))
+
+    static func forFile(_ url: URL) -> Coat {
+        let ext = url.pathExtension.lowercased()
+        var isDir: ObjCBool = false
+        if ext.isEmpty, FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
+            return blue
         }
-
-        let name = NSTextField(labelWithString: url.lastPathComponent)
-        name.font = .monospacedSystemFont(ofSize: 8.5, weight: .medium)
-        name.textColor = amber.withAlphaComponent(0.95)
-        name.alignment = .center
-        name.lineBreakMode = .byTruncatingMiddle
-        name.cell?.truncatesLastVisibleLine = true
-        // Dark pill behind the name so it reads on any wallpaper.
-        let textW = min(width, ceil(name.intrinsicContentSize.width) + 8)
-        name.frame = NSRect(x: (width - textW) / 2, y: 0, width: textW, height: Self.labelH - 1)
-        name.wantsLayer = true
-        name.layer?.backgroundColor = NSColor(white: 0.05, alpha: 0.8).cgColor
-        name.layer?.cornerRadius = (Self.labelH - 1) / 2
-        addSubview(name)
-
-        setImage(NSWorkspace.shared.icon(forFile: url.path))
-        let req = QLThumbnailGenerator.Request(fileAt: url, size: CGSize(width: 128, height: 128),
-                                               scale: 2, representationTypes: .thumbnail)
-        QLThumbnailGenerator.shared.generateBestRepresentation(for: req) { [weak self] rep, _ in
-            guard let img = rep?.nsImage else { return }
-            DispatchQueue.main.async { self?.setImage(img) }
+        switch ext {
+        case "png", "jpg", "jpeg", "gif", "heic", "heif", "webp", "tif", "tiff", "bmp", "svg", "ico", "avif", "raw":
+            return ginger
+        case "pdf":
+            return tuxedo
+        case "txt", "md", "markdown", "rtf", "doc", "docx", "pages", "odt", "csv", "xls", "xlsx", "numbers", "key", "ppt", "pptx":
+            return snowy
+        case "swift", "js", "ts", "tsx", "jsx", "py", "rb", "go", "rs", "c", "h", "cpp", "m", "java", "kt", "json",
+             "yaml", "yml", "toml", "xml", "html", "css", "scss", "sh", "zsh", "sql", "php", "log":
+            return greyTabby
+        case "mov", "mp4", "m4v", "avi", "mkv", "webm":
+            return siamese
+        case "mp3", "wav", "m4a", "aiff", "aif", "flac", "ogg", "aac":
+            return calico
+        case "zip", "rar", "7z", "tar", "gz", "tgz", "bz2", "xz", "dmg", "pkg":
+            return chocolate
+        case "fig", "sketch", "psd", "ai", "xd", "indd", "afdesign", "eps":
+            return pink
+        default:
+            return cream
         }
     }
-    required init?(coder: NSCoder) { fatalError() }
 
-    private func setImage(_ img: NSImage) {
-        dragImage = img
-        imageLayer.contents = img.cgImage(forProposedRect: nil, context: nil, hints: nil)
+    private static let nose = rgb(0xFF8FA3)
+
+    func color(_ ch: Character, _ x: Int, _ y: Int, blink: Bool) -> NSColor? {
+        switch ch {
+        case "O": return outline
+        case "E": return blink ? outline : eye
+        case "N": return Self.nose
+        case "S": return paws
+        case "B":
+            if let p = points, y <= 2 || y >= 13 || (y == 5 && (3...9).contains(x)) || (y == 4 && x == 6) { return p }
+            if patches.count == 2 {
+                if (x <= 5 && (8...12).contains(y)) || (x <= 4 && y <= 2) { return patches[0] }
+                if (x >= 8 && (9...11).contains(y)) || y >= 14 { return patches[1] }
+            }
+            if let s = stripes, (y == 3 && (x == 5 || x == 7)) || ((y == 9 || y == 11) && (3...9).contains(x)) || (y == 14 && x == 11) {
+                return s
+            }
+            return body
+        default: return nil
+        }
     }
 }
 
-/// The event horizon itself: shows the count, drag from it to pull everything out.
-final class HoleCore: FileDragSource {
-    private let big = NSTextField(labelWithString: "")
-    private let small = NSTextField(labelWithString: "")
+enum Kitten {
+    /// Top-down: head with ears up top, back below, tail curling off to the right.
+    static let sprite = [
+        "...O.....O....",
+        "..OBO...OBO...",
+        "..OBBOOOBBO...",
+        ".OBBBBBBBBBO..",
+        ".OBBEBBBEBBO..",
+        ".OBBBBNBBBBO..",
+        "..OBBBBBBBO...",
+        "..OSBBBBBSO...",
+        ".OBBBBBBBBBO..",
+        "OBBBBBBBBBBBO.",
+        "OBBBBBBBBBBBO.",
+        "OBBBBBBBBBBBO.",
+        ".OBBBBBBBBBO..",
+        "..OBBBBBBBOOO.",
+        "...OOOOOOOBBBO",
+        "..........OOO.",
+    ].map(Array.init)
+    static let cols = 14, rows = 16
+
+    /// Crisp at any scale: every sprite pixel is drawn as a `px`-point square.
+    static func image(_ coat: Coat, px: CGFloat, blink: Bool = false) -> NSImage {
+        NSImage(size: NSSize(width: CGFloat(cols) * px, height: CGFloat(rows) * px), flipped: true) { _ in
+            for (y, row) in sprite.enumerated() {
+                for (x, ch) in row.enumerated() {
+                    guard let c = coat.color(ch, x, y, blink: blink) else { continue }
+                    c.setFill()
+                    NSRect(x: CGFloat(x) * px, y: CGFloat(y) * px, width: px, height: px).fill()
+                }
+            }
+            return true
+        }
+    }
+}
+
+/// An oval wicker basket seen from above: braided rim, cushion inside, a strip of front wall below.
+enum Basket {
+    static let cols = 76, rows = 63
+    static let center = (x: 38.0, y: 28.0)
+    static let outer = (rx: 38.0, ry: 28.0)
+    static let inner = (rx: 33.0, ry: 23.0)    // cushion
+    static let wall = 6.0                       // rows of front wall visible under the rim
+    /// The free cushion area kittens sit on (a bit inside the cushion edge).
+    static let seat = (rx: 31.0, ry: 21.0)
+
+    private static func norm(_ x: Int, _ y: Int, _ r: (rx: Double, ry: Double)) -> Double {
+        let dx = (Double(x) + 0.5 - center.x) / r.rx, dy = (Double(y) + 0.5 - center.y) / r.ry
+        return dx * dx + dy * dy
+    }
+
+    private static func inShape(_ x: Int, _ y: Int) -> Bool {
+        guard x >= 0, x < cols, y >= 0, y < rows else { return false }
+        if norm(x, y, outer) <= 1 { return true }
+        // Front wall: the rim's lower edge pushed down by `wall` rows.
+        let dx = (Double(x) + 0.5 - center.x) / outer.rx
+        guard abs(dx) <= 1, Double(y) + 0.5 > center.y else { return false }
+        return Double(y) + 0.5 - center.y <= outer.ry * (1 - dx * dx).squareRoot() + wall
+    }
+
+    static func contains(gridX x: Int, gridY y: Int) -> Bool { inShape(x, y) }
+
+    static func image(px: CGFloat) -> NSImage {
+        let outline = rgb(0x5A3A22)
+        let rimA = rgb(0xE7B977), rimB = rgb(0xC98F4E)
+        let wallA = rgb(0xB97D3F), wallB = rgb(0x9A6532)
+        let cushion = rgb(0xF6C9D3), cushionDot = rgb(0xEBAFBF), cushionShade = rgb(0xDFA0B2)
+        return NSImage(size: NSSize(width: CGFloat(cols) * px, height: CGFloat(rows) * px), flipped: true) { _ in
+            for y in 0..<rows {
+                for x in 0..<cols where inShape(x, y) {
+                    let edge = !inShape(x - 1, y) || !inShape(x + 1, y) || !inShape(x, y - 1) || !inShape(x, y + 1)
+                    let o = norm(x, y, outer), i = norm(x, y, inner)
+                    let c: NSColor
+                    if edge {
+                        c = outline
+                    } else if o > 1 {
+                        c = (x / 2 + (y % 2)) % 2 == 0 ? wallA : wallB          // woven front wall
+                    } else if i > 1 {
+                        // Braided rim: alternating segments around the oval, outlined on the inside.
+                        if i <= 1.09 { c = outline }
+                        else {
+                            let a = atan2((Double(y) + 0.5 - center.y) / outer.ry, (Double(x) + 0.5 - center.x) / outer.rx)
+                            c = Int((a + .pi) / (2 * .pi) * 56) % 2 == 0 ? rimA : rimB
+                        }
+                    } else if i > 0.82 {
+                        c = cushionShade                                        // shadow under the rim
+                    } else {
+                        c = x % 6 == 0 && y % 4 == 0 ? cushionDot : cushion     // quilted cushion
+                    }
+                    c.setFill()
+                    NSRect(x: CGFloat(x) * px, y: CGFloat(y) * px, width: px, height: px).fill()
+                }
+            }
+            return true
+        }
+    }
+}
+
+// MARK: - Kittens (one per file) and the basket (drag it to take everyone)
+
+/// A file as a pixel kitten: coat by file type, name below.
+final class KittenTile: FileDragSource {
+    static let labelH: CGFloat = 14
+    let spriteH: CGFloat
+    private let art = CALayer()
+
+    init(url: URL, px: CGFloat, width: CGFloat) {
+        let coat = Coat.forFile(url)
+        let img = Kitten.image(coat, px: px)
+        spriteH = img.size.height
+        super.init(frame: NSRect(x: 0, y: 0, width: width, height: spriteH + Self.labelH))
+        urls = [url]
+        dragImage = img
+        toolTip = "\(url.lastPathComponent)\n\(coat.name)"
+        wantsLayer = true
+
+        art.frame = CGRect(x: (width - img.size.width) / 2, y: Self.labelH, width: img.size.width, height: spriteH)
+        art.contents = img.cg
+        art.magnificationFilter = .nearest
+        art.shadowColor = NSColor.black.cgColor
+        art.shadowOpacity = 0.3
+        art.shadowRadius = 1.5
+        art.shadowOffset = CGSize(width: 1, height: -2)
+        layer?.addSublayer(art)
+
+        let name = NSTextField(labelWithString: url.lastPathComponent)
+        name.font = .monospacedSystemFont(ofSize: 8.5, weight: .medium)
+        name.textColor = rgb(0xFFF3DC)
+        name.alignment = .center
+        name.lineBreakMode = .byTruncatingMiddle
+        name.cell?.truncatesLastVisibleLine = true
+        // Dark pill behind the name so it reads on the cushion.
+        let textW = min(width, ceil(name.intrinsicContentSize.width) + 8)
+        name.frame = NSRect(x: (width - textW) / 2, y: 0, width: textW, height: Self.labelH - 1)
+        name.wantsLayer = true
+        name.layer?.backgroundColor = rgb(0x3A2618, 0.85).cgColor
+        name.layer?.cornerRadius = (Self.labelH - 1) / 2
+        addSubview(name)
+
+        idle(coat: coat, px: px)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    /// Each kitten breathes, hops and blinks on its own rhythm.
+    private func idle(coat: Coat, px: CGFloat) {
+        let now = CACurrentMediaTime()
+        let hop = CAKeyframeAnimation(keyPath: "transform.translation.y")
+        hop.values = [0, 0, px, 0, 0]
+        hop.keyTimes = [0, 0.75, 0.82, 0.9, 1]
+        hop.duration = .random(in: 2.2...3.8)
+        hop.repeatCount = .infinity
+        hop.beginTime = now + .random(in: 0...2)
+        art.add(hop, forKey: "hop")
+
+        let open = Kitten.image(coat, px: px).cg!, shut = Kitten.image(coat, px: px, blink: true).cg!
+        let blink = CAKeyframeAnimation(keyPath: "contents")
+        blink.values = [open, shut, open]
+        blink.keyTimes = [0, 0.94, 0.97]
+        blink.calculationMode = .discrete
+        blink.duration = .random(in: 3...5.5)
+        blink.repeatCount = .infinity
+        blink.beginTime = now + .random(in: 0...3)
+        art.add(blink, forKey: "blink")
+    }
+}
+
+/// The basket: drag from it (anywhere not covered by a kitten) to take every kitten at once.
+final class BasketCore: FileDragSource {
+    static let px: CGFloat = 6
+    private let art = CALayer()
+    private let hint = NSTextField(labelWithString: "")
+    private let countTag = NSTextField(labelWithString: "")
+
+    /// Cushion centre and the radii kittens may use, in this view's coordinates.
+    var seatCenter: CGPoint {
+        CGPoint(x: CGFloat(Basket.center.x) * Self.px, y: bounds.height - CGFloat(Basket.center.y) * Self.px)
+    }
+    var seatRadii: CGSize { CGSize(width: Basket.seat.rx * Self.px, height: Basket.seat.ry * Self.px) }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
-        for l in [big, small] {
-            l.alignment = .center
-            l.translatesAutoresizingMaskIntoConstraints = false
-            let glow = NSShadow()
-            glow.shadowColor = NSColor(srgbRed: 1, green: 0.6, blue: 0.2, alpha: 1)
-            glow.shadowBlurRadius = 8
-            l.shadow = glow
-            addSubview(l)
-        }
-        NSLayoutConstraint.activate([
-            big.centerXAnchor.constraint(equalTo: centerXAnchor),
-            big.centerYAnchor.constraint(equalTo: centerYAnchor, constant: 6),
-            small.centerXAnchor.constraint(equalTo: centerXAnchor),
-            small.topAnchor.constraint(equalTo: big.bottomAnchor, constant: 0),
-        ])
+        wantsLayer = true
+        let img = Basket.image(px: Self.px)
+        art.contents = img.cg
+        art.magnificationFilter = .nearest
+        art.frame = bounds
+        art.shadowColor = rgb(0xFF9EB5).cgColor
+        art.shadowOffset = .zero
+        art.shadowRadius = 0
+        art.shadowOpacity = 0.9
+        layer?.addSublayer(art)
+
+        // Hint on the empty cushion.
+        hint.alignment = .center
+        hint.attributedStringValue = {
+            let s = NSMutableAttributedString(string: "мяу\n", attributes: [
+                .font: NSFont.monospacedSystemFont(ofSize: 16, weight: .bold), .foregroundColor: rgb(0xB0687E)])
+            s.append(NSAttributedString(string: "кидай сюда", attributes: [
+                .font: NSFont.monospacedSystemFont(ofSize: 9, weight: .medium), .foregroundColor: rgb(0xB0687E, 0.75)]))
+            return s
+        }()
+        hint.sizeToFit()
+        hint.setFrameOrigin(NSPoint(x: seatCenter.x - hint.frame.width / 2, y: seatCenter.y - hint.frame.height / 2))
+        addSubview(hint)
+
+        // Count tag on the front wall.
+        countTag.alignment = .center
+        countTag.wantsLayer = true
+        countTag.layer?.backgroundColor = rgb(0x3A2618, 0.9).cgColor
+        countTag.layer?.cornerRadius = 8
+        addSubview(countTag)
         update(count: 0)
     }
     required init?(coder: NSCoder) { fatalError() }
 
     func update(count: Int) {
-        let amber = NSColor(srgbRed: 1, green: 0.78, blue: 0.45, alpha: 1)
-        if count == 0 {
-            big.stringValue = ""
-            small.stringValue = ""
-            toolTip = nil
-        } else {
-            big.attributedStringValue = spaced("\(count)", size: 26, weight: .bold, color: amber, kern: 1)
-            small.attributedStringValue = spaced("PULL OUT", size: 7, weight: .medium, color: amber.withAlphaComponent(0.6), kern: 2.5)
-            toolTip = "Drag from the hole to pull out all \(count) file\(count == 1 ? "" : "s")"
-        }
+        hint.isHidden = count > 0
+        countTag.isHidden = count == 0
+        toolTip = count == 0 ? nil : "Потяни корзинку, чтобы забрать всех котиков (\(count))"
+        countTag.attributedStringValue = NSAttributedString(string: "котиков: \(count) · тяни корзинку", attributes: [
+            .font: NSFont.monospacedSystemFont(ofSize: 8.5, weight: .semibold), .foregroundColor: rgb(0xFFF3DC)])
+        let w = ceil(countTag.intrinsicContentSize.width) + 16
+        countTag.frame = NSRect(x: (bounds.width - w) / 2, y: 2, width: w, height: 16)
     }
 
-    private func spaced(_ s: String, size: CGFloat, weight: NSFont.Weight, color: NSColor, kern: CGFloat) -> NSAttributedString {
-        NSAttributedString(string: s, attributes: [
-            .font: NSFont.monospacedSystemFont(ofSize: size, weight: weight),
-            .foregroundColor: color,
-            .kern: kern,
-        ])
-    }
-
-    // Only the round horizon is grabbable.
+    // Only the basket itself is grabbable, not the transparent corners.
     override func hitTest(_ point: NSPoint) -> NSView? {
         let p = convert(point, from: superview)
-        let r = bounds.width / 2
-        return hypot(p.x - r, p.y - r) <= r ? self : nil
+        let gx = Int(p.x / Self.px), gy = Int((bounds.height - p.y) / Self.px)
+        return Basket.contains(gridX: gx, gridY: gy) ? self : nil
+    }
+
+    /// A drag hovering over the window: the basket perks up.
+    func setHungry(_ on: Bool) {
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(0.2)
+        art.setValue(on ? 1.03 : 1.0, forKeyPath: "transform.scale")
+        art.shadowRadius = on ? 16 : 0
+        CATransaction.commit()
+    }
+
+    /// Wobble when kittens land.
+    func bounce() {
+        let a = CAKeyframeAnimation(keyPath: "transform")
+        a.values = [CATransform3DIdentity, CATransform3DMakeScale(1.04, 0.95, 1),
+                    CATransform3DMakeScale(0.98, 1.02, 1), CATransform3DIdentity].map { NSValue(caTransform3D: $0) }
+        a.duration = 0.4
+        art.add(a, forKey: "bounce")
     }
 }
 
@@ -439,242 +645,31 @@ final class DropView: NSView {
     }
 }
 
-// MARK: - Black hole visuals (pure Core Animation, no hit testing)
+// MARK: - The basket panel
 
-final class BlackHoleFX: NSView {
-    let holeR: CGFloat
-    private let glow = CAGradientLayer()
-    private let halo = CAGradientLayer()
-    private let photonRing = CAShapeLayer()
-    private let horizon = CAShapeLayer()
-    private let emitter = CAEmitterLayer()
-    private var spinners: [(CALayer, Double)] = []
-
-    static let hot: [CGColor] = [
-        NSColor(srgbRed: 1.00, green: 0.97, blue: 0.85, alpha: 1),
-        NSColor(srgbRed: 1.00, green: 0.70, blue: 0.30, alpha: 1),
-        NSColor(srgbRed: 0.85, green: 0.30, blue: 0.10, alpha: 0.9),
-        NSColor(srgbRed: 0.45, green: 0.10, blue: 0.35, alpha: 0.5),
-        NSColor(srgbRed: 1.00, green: 0.60, blue: 0.20, alpha: 0.9),
-        NSColor(srgbRed: 1.00, green: 0.92, blue: 0.70, alpha: 1),
-        NSColor(srgbRed: 0.95, green: 0.45, blue: 0.15, alpha: 0.8),
-        NSColor(srgbRed: 1.00, green: 0.97, blue: 0.85, alpha: 1),
-    ].map(\.cgColor)
-
-    init(frame: NSRect, holeR: CGFloat) {
-        self.holeR = holeR
-        super.init(frame: frame)
-        wantsLayer = true
-        build()
-    }
-    required init?(coder: NSCoder) { fatalError() }
-
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
-
-    private var c: CGPoint { CGPoint(x: bounds.midX, y: bounds.midY) }
-
-    private func centered(_ l: CALayer, _ d: CGFloat) {
-        l.bounds = CGRect(x: 0, y: 0, width: d, height: d)
-        l.position = c
-    }
-
-    /// Soft radial ring mask: transparent inside `inner`, fades out to the edge.
-    private func ringMask(d: CGFloat, inner: CGFloat, peak: CGFloat = 0.06) -> CAGradientLayer {
-        let m = CAGradientLayer()
-        m.type = .radial
-        m.frame = CGRect(x: 0, y: 0, width: d, height: d)
-        m.startPoint = CGPoint(x: 0.5, y: 0.5)
-        m.endPoint = CGPoint(x: 1, y: 1)
-        let i = Double(inner / (d / 2))
-        m.colors = [NSColor.clear, .clear, .white, NSColor.white.withAlphaComponent(0.5), .clear].map(\.cgColor)
-        m.locations = [0, i, min(i + peak, 0.95), 0.72, 1].map { NSNumber(value: $0) }
-        return m
-    }
-
-    private func conic(d: CGFloat) -> CAGradientLayer {
-        let g = CAGradientLayer()
-        g.type = .conic
-        g.frame = CGRect(x: 0, y: 0, width: d, height: d)
-        g.startPoint = CGPoint(x: 0.5, y: 0.5)
-        g.endPoint = CGPoint(x: 0.5, y: 0)
-        g.colors = Self.hot
-        return g
-    }
-
-    /// The accretion disk seen almost edge-on.
-    private func tiltedDisk(d: CGFloat, spin: Double) -> CALayer {
-        let plane = CALayer()
-        centered(plane, d)
-        var t = CATransform3DIdentity
-        t.m34 = -1 / 900
-        t = CATransform3DRotate(t, 1.27, 1, 0, 0)
-        plane.transform = t
-        let disk = conic(d: d)
-        disk.mask = ringMask(d: d, inner: holeR * 1.2, peak: 0.1)
-        plane.addSublayer(disk)
-        spinners.append((disk, spin))
-        return plane
-    }
-
-    private func build() {
-        guard let root = layer else { return }
-        let w = bounds.width
-
-        // Ambient glow
-        glow.type = .radial
-        glow.frame = bounds
-        glow.startPoint = CGPoint(x: 0.5, y: 0.5)
-        glow.endPoint = CGPoint(x: 1, y: 1)
-        glow.colors = [NSColor(srgbRed: 1, green: 0.55, blue: 0.2, alpha: 0.45),
-                       NSColor(srgbRed: 0.5, green: 0.15, blue: 0.6, alpha: 0.18),
-                       NSColor.clear].map(\.cgColor)
-        glow.locations = [0.2, 0.5, 1]
-        glow.opacity = 0.7
-        root.addSublayer(glow)
-
-        // Lensed halo (the far side of the disk bent around the hole)
-        let haloD = holeR * 3.6
-        centered(halo, haloD)
-        halo.type = .conic
-        halo.startPoint = CGPoint(x: 0.5, y: 0.5)
-        halo.endPoint = CGPoint(x: 0.5, y: 0)
-        halo.colors = Self.hot
-        halo.mask = ringMask(d: haloD, inner: holeR * 1.02, peak: 0.05)
-        root.addSublayer(halo)
-        spinners.append((halo, 9))
-
-        // Back half of the disk
-        let diskD = w * 0.86
-        root.addSublayer(tiltedDisk(d: diskD, spin: 5))
-
-        // Infalling particles
-        emitter.emitterPosition = c
-        emitter.emitterShape = .circle
-        emitter.emitterMode = .outline
-        emitter.emitterSize = CGSize(width: w * 0.9, height: w * 0.9)
-        emitter.renderMode = .additive
-        let cell = CAEmitterCell()
-        cell.contents = Self.dotImage()
-        cell.birthRate = 30
-        cell.lifetime = 2.6
-        cell.velocity = -70
-        cell.velocityRange = 15
-        cell.scale = 0.18
-        cell.scaleRange = 0.1
-        cell.scaleSpeed = -0.05
-        cell.alphaSpeed = -0.25
-        cell.color = NSColor(srgbRed: 1, green: 0.8, blue: 0.55, alpha: 0.9).cgColor
-        cell.spin = 2
-        emitter.emitterCells = [cell]
-        root.addSublayer(emitter)
-
-        // Event horizon + photon ring
-        let circle = CGPath(ellipseIn: CGRect(x: -holeR, y: -holeR, width: holeR * 2, height: holeR * 2), transform: nil)
-        horizon.path = circle
-        horizon.position = c
-        horizon.fillColor = NSColor.black.cgColor
-        horizon.shadowColor = NSColor(srgbRed: 1, green: 0.6, blue: 0.2, alpha: 1).cgColor
-        horizon.shadowRadius = 14
-        horizon.shadowOpacity = 1
-        horizon.shadowOffset = .zero
-        root.addSublayer(horizon)
-
-        photonRing.path = CGPath(ellipseIn: CGRect(x: -holeR - 1.5, y: -holeR - 1.5,
-                                                   width: holeR * 2 + 3, height: holeR * 2 + 3), transform: nil)
-        photonRing.position = c
-        photonRing.fillColor = nil
-        photonRing.strokeColor = NSColor(srgbRed: 1, green: 0.93, blue: 0.75, alpha: 0.95).cgColor
-        photonRing.lineWidth = 1.6
-        photonRing.shadowColor = NSColor(srgbRed: 1, green: 0.8, blue: 0.4, alpha: 1).cgColor
-        photonRing.shadowRadius = 5
-        photonRing.shadowOpacity = 1
-        photonRing.shadowOffset = .zero
-        root.addSublayer(photonRing)
-
-        // Near half of the disk crosses in front of the hole
-        let front = CALayer()
-        front.frame = bounds
-        let lowerHalf = CALayer()
-        lowerHalf.frame = CGRect(x: 0, y: 0, width: w, height: bounds.midY)
-        lowerHalf.backgroundColor = NSColor.black.cgColor
-        front.mask = lowerHalf
-        front.addSublayer(tiltedDisk(d: diskD, spin: 5))
-        root.addSublayer(front)
-    }
-
-    func startAnimations() {
-        for (l, dur) in spinners {
-            let a = CABasicAnimation(keyPath: "transform.rotation.z")
-            a.fromValue = 0
-            a.toValue = -2 * Double.pi
-            a.duration = dur
-            a.repeatCount = .infinity
-            l.add(a, forKey: "spin")
-        }
-        let breathe = CABasicAnimation(keyPath: "opacity")
-        breathe.fromValue = 0.55
-        breathe.toValue = 0.85
-        breathe.duration = 2.4
-        breathe.autoreverses = true
-        breathe.repeatCount = .infinity
-        glow.add(breathe, forKey: "breathe")
-    }
-
-    /// Hovering a drag over the hole: it gets hungrier.
-    func setHungry(_ on: Bool) {
-        CATransaction.begin()
-        CATransaction.setAnimationDuration(0.25)
-        glow.setValue(on ? 1.15 : 1.0, forKeyPath: "transform.scale")
-        horizon.shadowRadius = on ? 26 : 14
-        photonRing.lineWidth = on ? 2.6 : 1.6
-        CATransaction.commit()
-        emitter.birthRate = on ? 4 : 1
-    }
-
-    /// Flash when something falls in.
-    func gulp() {
-        let a = CAKeyframeAnimation(keyPath: "shadowRadius")
-        a.values = [14, 40, 14]
-        a.duration = 0.6
-        horizon.add(a, forKey: "gulp")
-        let s = CAKeyframeAnimation(keyPath: "transform.scale")
-        s.values = [1, 1.08, 1]
-        s.duration = 0.5
-        photonRing.add(s, forKey: "gulp")
-    }
-
-    private static func dotImage() -> CGImage {
-        let img = NSImage(size: NSSize(width: 24, height: 24), flipped: false) { r in
-            NSGradient(colors: [.white, NSColor.white.withAlphaComponent(0)])!
-                .draw(in: NSBezierPath(ovalIn: r), relativeCenterPosition: .zero)
-            return true
-        }
-        return img.cgImage(forProposedRect: nil, context: nil, hints: nil)!
-    }
-}
-
-// MARK: - The black hole panel
-
-final class HolePanel: NSPanel {
-    static let size: CGFloat = 440
-    private let holeR: CGFloat = 60
-    private let orbitR: CGFloat = 150
-    private let root = DropView(frame: NSRect(x: 0, y: 0, width: HolePanel.size, height: HolePanel.size))
-    private let fx: BlackHoleFX
-    private let core: HoleCore
-    private var tiles: [URL: OrbitTile] = [:]
-    private var orbitAngle: CGFloat = 0
-    private var orbitTimer: Timer?
-    private var lastTick: TimeInterval = 0
+final class BasketPanel: NSPanel {
+    static let width: CGFloat = 520, height: CGFloat = 480
+    private let root = DropView(frame: NSRect(x: 0, y: 0, width: BasketPanel.width, height: BasketPanel.height))
+    private let basket: BasketCore
+    private var tiles: [URL: KittenTile] = [:]
+    private var style = Style.all[0]
     private(set) var isCollapsing = false
 
-    private var center: CGPoint { CGPoint(x: Self.size / 2, y: Self.size / 2) }
+    private var slots: [CGPoint] = []
+
+    /// Kitten size steps down as the basket fills up.
+    struct Style: Equatable {
+        let px: CGFloat, width: CGFloat
+        var tileH: CGFloat { CGFloat(Kitten.rows) * px + KittenTile.labelH }
+        static let all = [Style(px: 4, width: 76), Style(px: 3, width: 64), Style(px: 2, width: 52), Style(px: 2, width: 42)]
+    }
+
+    private var center: CGPoint { CGPoint(x: Self.width / 2, y: Self.height / 2) }
 
     init() {
-        let s = Self.size
-        fx = BlackHoleFX(frame: NSRect(x: 0, y: 0, width: s, height: s), holeR: holeR)
-        core = HoleCore(frame: NSRect(x: s / 2 - holeR, y: s / 2 - holeR, width: holeR * 2, height: holeR * 2))
-        super.init(contentRect: NSRect(x: 0, y: 0, width: s, height: s),
+        let bw = CGFloat(Basket.cols) * BasketCore.px, bh = CGFloat(Basket.rows) * BasketCore.px
+        basket = BasketCore(frame: NSRect(x: (Self.width - bw) / 2, y: 44, width: bw, height: bh))
+        super.init(contentRect: NSRect(x: 0, y: 0, width: Self.width, height: Self.height),
                    styleMask: [.borderless, .nonactivatingPanel],
                    backing: .buffered, defer: false)
         isOpaque = false
@@ -689,13 +684,13 @@ final class HolePanel: NSPanel {
 
         root.wantsLayer = true
         contentView = root
-        root.addSubview(fx)
-        root.addSubview(core)
+        root.addSubview(basket)
+        basket.layer?.zPosition = -10_000
         buildControls()
 
-        root.onHighlight = { [weak self] on in self?.fx.setHungry(on) }
-        root.onDrop = { [weak self] point, urls in self?.swallow(urls, from: point) }
-        core.onDraggedOut = { [weak self] in
+        root.onHighlight = { [weak self] on in self?.basket.setHungry(on) }
+        root.onDrop = { [weak self] point, urls in self?.jumpIn(urls, from: point) }
+        basket.onDraggedOut = { [weak self] in
             Store.shared.clear()
             self?.collapse()
         }
@@ -708,155 +703,174 @@ final class HolePanel: NSPanel {
 
     private func buildControls() {
         let buttons = [
-            control("doc.on.doc", "Copy paths (paste into terminal)", #selector(copyPaths)),
-            control("trash", "Clear", #selector(clearShelf)),
-            control("xmark", "Close (Esc)", #selector(closeHole)),
+            control("doc.on.doc", "Скопировать пути (вставить в терминал)", #selector(copyPaths)),
+            control("trash", "Очистить", #selector(clearShelf)),
+            control("xmark", "Закрыть (Esc)", #selector(closeHole)),
         ]
         let bar = NSStackView(views: buttons)
         bar.spacing = 14
+        bar.edgeInsets = NSEdgeInsets(top: 4, left: 12, bottom: 4, right: 12)
+        bar.wantsLayer = true
+        bar.layer?.backgroundColor = rgb(0x3A2618, 0.85).cgColor
+        bar.layer?.cornerRadius = 11
         bar.translatesAutoresizingMaskIntoConstraints = false
         root.addSubview(bar)
+        bar.layer?.zPosition = 10_000
         NSLayoutConstraint.activate([
             bar.centerXAnchor.constraint(equalTo: root.centerXAnchor),
-            bar.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -16),
+            bar.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -12),
+            bar.heightAnchor.constraint(equalToConstant: 22),
         ])
     }
 
     private func control(_ symbol: String, _ tip: String, _ action: Selector) -> NSButton {
-        let cfg = NSImage.SymbolConfiguration(pointSize: 12, weight: .semibold)
+        let cfg = NSImage.SymbolConfiguration(pointSize: 11, weight: .semibold)
         let img = NSImage(systemSymbolName: symbol, accessibilityDescription: tip)!.withSymbolConfiguration(cfg)!
         let b = NSButton(image: img, target: self, action: action)
         b.isBordered = false
-        b.contentTintColor = NSColor(srgbRed: 1, green: 0.8, blue: 0.55, alpha: 0.75)
+        b.contentTintColor = rgb(0xFFF3DC, 0.85)
         b.toolTip = tip
         return b
     }
 
-    // MARK: Orbit
+    // MARK: Kittens
 
     private func reload() {
         let items = Store.shared.items
-        core.urls = items
-        core.dragImage = items.count == 1 ? tiles[items[0]]?.dragImage : nil
-        core.update(count: items.count)
+        basket.urls = items
+        basket.dragImage = items.count == 1 ? tiles[items[0]]?.dragImage : nil
+        basket.update(count: items.count)
 
+        var next = Style.all.last!
+        var nextSlots = seats(for: next)
+        for st in Style.all {
+            let s = seats(for: st)
+            if s.count >= items.count { next = st; nextSlots = s; break }
+        }
+        slots = nextSlots
+        if next != style {
+            // Kittens resize: recreate them all.
+            style = next
+            tiles.values.forEach { $0.removeFromSuperview() }
+            tiles.removeAll()
+        }
         for (url, t) in tiles where !items.contains(url) {
             t.removeFromSuperview()
             tiles[url] = nil
         }
-        let side: CGFloat = items.count > 12 ? 34 : 44
         for url in items where tiles[url] == nil {
-            let t = OrbitTile(url: url, side: side, width: 92)
+            let t = KittenTile(url: url, px: style.px, width: style.width)
             t.onDraggedOut = { [weak self] in
-                // The dragged file leaves the orbit; the rest keep circling.
+                // The dragged kitten leaves; the rest shuffle over.
                 Store.shared.remove(url)
                 if Store.shared.items.isEmpty { self?.collapse() }
             }
-            root.addSubview(t, positioned: .below, relativeTo: core)
+            root.addSubview(t, positioned: .above, relativeTo: basket)
+            t.setFrameOrigin(origin(of: items.firstIndex(of: url)!))
             tiles[url] = t
         }
-        layoutOrbit()
-    }
-
-    private func layoutOrbit() {
-        let items = Store.shared.items
-        guard !items.isEmpty else { return }
-        for (i, url) in items.enumerated() {
-            guard let t = tiles[url] else { continue }
-            let a = orbitAngle + CGFloat(i) * 2 * .pi / CGFloat(items.count)
-            // Slightly flattened orbit to match the tilted disk.
-            let p = CGPoint(x: center.x + orbitR * cos(a), y: center.y + orbitR * 0.82 * sin(a))
-            t.setFrameOrigin(NSPoint(x: p.x - t.frame.width / 2, y: p.y - OrbitTile.labelH - t.side / 2))
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.25
+            for (i, url) in items.enumerated() {
+                guard let t = tiles[url] else { continue }
+                let o = origin(of: i)
+                t.animator().setFrameOrigin(o)
+                t.layer?.zPosition = -o.y    // top-down: lower kittens are drawn over higher ones
+            }
         }
     }
 
-    private func startOrbit() {
-        orbitTimer?.invalidate()
-        lastTick = ProcessInfo.processInfo.systemUptime
-        let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in self?.tickOrbit() }
-        RunLoop.main.add(timer, forMode: .common)
-        orbitTimer = timer
+    /// Kitten spots on the cushion for a style, nearest to the middle first.
+    private func seats(for st: Style) -> [CGPoint] {
+        let c = CGPoint(x: basket.frame.minX + basket.seatCenter.x, y: basket.frame.minY + basket.seatCenter.y)
+        let r = basket.seatRadii
+        let halfW = CGFloat(Kitten.cols) * st.px / 2 + 4, halfH = st.tileH / 2
+        func fits(_ p: CGPoint) -> Bool {
+            [(-1, -1), (-1, 1), (1, -1), (1, 1)].allSatisfy { sx, sy in
+                let dx = (p.x + CGFloat(sx) * halfW - c.x) / r.width, dy = (p.y + CGFloat(sy) * halfH - c.y) / r.height
+                return dx * dx + dy * dy <= 1
+            }
+        }
+        var out: [CGPoint] = []
+        let stepY = st.tileH - 2
+        let n = Int(r.height / stepY) + 1, m = Int(r.width / st.width) + 1
+        for row in -n...n {
+            let shift: CGFloat = row % 2 == 0 ? 0 : 0.5      // brick pattern, like a pile
+            for col in -m...m {
+                let p = CGPoint(x: c.x + (CGFloat(col) + shift) * st.width, y: c.y + CGFloat(row) * stepY)
+                if fits(p) { out.append(p) }
+            }
+        }
+        func d(_ p: CGPoint) -> CGFloat { pow((p.x - c.x) / r.width, 2) + pow((p.y - c.y) / r.height, 2) }
+        return out.sorted { d($0) != d($1) ? d($0) < d($1) : ($0.y != $1.y ? $0.y > $1.y : $0.x < $1.x) }
     }
 
-    private func tickOrbit() {
-        let now = ProcessInfo.processInfo.systemUptime
-        let dt = now - lastTick
-        lastTick = now
-        // Slow down (but keep circling) while the cursor is near the orbit, so files are easy to grab.
-        let m = mouseLocationOutsideOfEventStream
-        let d = hypot(m.x - center.x, m.y - center.y)
-        let nearOrbit = d > orbitR - 50 && d < orbitR + 50
-        orbitAngle += CGFloat(dt) * (nearOrbit ? 0.08 : 0.3)
-        layoutOrbit()
+    /// Bottom-left corner of the i-th kitten tile. Past capacity, kittens pile on top of each other.
+    private func origin(of i: Int) -> NSPoint {
+        guard !slots.isEmpty else { return center }
+        let layer = CGFloat(i / slots.count)
+        let p = slots[i % slots.count]
+        return NSPoint(x: p.x - style.width / 2 + layer * 6, y: p.y - style.tileH / 2 - layer * 6)
     }
 
-    // MARK: Swallow animation
+    // MARK: Jump-in animation
 
-    private func swallow(_ urls: [URL], from point: NSPoint) {
-        fx.gulp()
-        for (k, url) in urls.prefix(8).enumerated() {
-            let tile = tiles[url]
-            tile?.alphaValue = 0
-            let img = tile?.dragImage ?? NSWorkspace.shared.icon(forFile: url.path)
+    private func jumpIn(_ urls: [URL], from point: NSPoint) {
+        basket.bounce()
+        let items = Store.shared.items
+        for (k, url) in urls.prefix(10).enumerated() {
+            guard let tile = tiles[url], let i = items.firstIndex(of: url) else { continue }
+            tile.alphaValue = 0
+            let o = origin(of: i)
+            let end = CGPoint(x: o.x + style.width / 2, y: o.y + KittenTile.labelH + tile.spriteH / 2)
+            let start = CGPoint(x: point.x + CGFloat(k) * 12, y: point.y - CGFloat(k) * 6)
 
             let ghost = CALayer()
-            ghost.contents = img.cgImage(forProposedRect: nil, context: nil, hints: nil)
-            ghost.contentsGravity = .resizeAspect
-            ghost.bounds = CGRect(x: 0, y: 0, width: 64, height: 64)
-            ghost.position = center
+            ghost.contents = tile.dragImage?.cg
+            ghost.magnificationFilter = .nearest
+            ghost.bounds = CGRect(origin: .zero, size: tile.dragImage?.size ?? .zero)
+            ghost.position = end
             ghost.opacity = 0
             root.layer?.addSublayer(ghost)
+            ghost.zPosition = 9_000
 
-            let start = CGPoint(x: point.x + CGFloat(k) * 10, y: point.y - CGFloat(k) * 10)
+            // A hop: up over the rim, then down into place.
             let path = CGMutablePath()
-            let r0 = max(hypot(start.x - center.x, start.y - center.y), 40)
-            let a0 = atan2(start.y - center.y, start.x - center.x)
-            for i in 0...48 {
-                let t = CGFloat(i) / 48
-                let r = r0 * pow(1 - t, 1.3)
-                let a = a0 + t * 2.6 * .pi
-                let p = CGPoint(x: center.x + r * cos(a), y: center.y + r * 0.85 * sin(a))
-                i == 0 ? path.move(to: p) : path.addLine(to: p)
-            }
+            path.move(to: start)
+            path.addQuadCurve(to: end, control: CGPoint(x: (start.x + end.x) / 2, y: max(start.y, end.y) + 90))
             let move = CAKeyframeAnimation(keyPath: "position")
             move.path = path
-            let scale = CABasicAnimation(keyPath: "transform.scale")
-            scale.fromValue = 1
-            scale.toValue = 0.02
-            let spin = CABasicAnimation(keyPath: "transform.rotation.z")
-            spin.fromValue = 0
-            spin.toValue = 4 * Double.pi
+            let squash = CAKeyframeAnimation(keyPath: "transform")
+            squash.values = [CATransform3DMakeScale(0.9, 1.1, 1), CATransform3DIdentity,
+                             CATransform3DMakeScale(1.15, 0.85, 1), CATransform3DIdentity].map { NSValue(caTransform3D: $0) }
+            squash.keyTimes = [0, 0.5, 0.9, 1]
             let fade = CAKeyframeAnimation(keyPath: "opacity")
-            fade.values = [1, 1, 0.8, 0]
-            fade.keyTimes = [0, 0.5, 0.85, 1]
+            fade.values = [0, 1, 1]
+            fade.keyTimes = [0, 0.1, 1]
             let group = CAAnimationGroup()
-            group.animations = [move, scale, spin, fade]
-            group.duration = 0.8
-            group.beginTime = CACurrentMediaTime() + Double(k) * 0.08
-            group.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            group.animations = [move, squash, fade]
+            group.duration = 0.55
+            group.beginTime = CACurrentMediaTime() + Double(k) * 0.09
+            group.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
             group.fillMode = .backwards
-            ghost.add(group, forKey: "swallow")
+            ghost.add(group, forKey: "jump")
 
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.85 + Double(k) * 0.08) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.55 + Double(k) * 0.09) {
                 ghost.removeFromSuperlayer()
-                NSAnimationContext.runAnimationGroup { ctx in
-                    ctx.duration = 0.5
-                    tile?.animator().alphaValue = 1
-                }
+                tile.alphaValue = 1
             }
         }
-        for url in urls.dropFirst(8) { tiles[url]?.alphaValue = 1 }
+        for url in urls.dropFirst(10) { tiles[url]?.alphaValue = 1 }
     }
 
     // MARK: Open / close
 
     /// Scale around the window center regardless of the layer's anchor point.
-    private func scaleTransform(_ s: CGFloat, rotate: CGFloat = 0) -> CATransform3D {
+    private func scaleTransform(_ s: CGFloat) -> CATransform3D {
         guard let l = root.layer else { return CATransform3DIdentity }
         let pivot = CGPoint(x: center.x - l.anchorPoint.x * l.bounds.width,
                             y: center.y - l.anchorPoint.y * l.bounds.height)
         var t = CATransform3DMakeTranslation(-pivot.x, -pivot.y, 0)
-        t = CATransform3DConcat(t, CATransform3DMakeRotation(rotate, 0, 0, 1))
         t = CATransform3DConcat(t, CATransform3DMakeScale(s, s, 1))
         return CATransform3DConcat(t, CATransform3DMakeTranslation(pivot.x, pivot.y, 0))
     }
@@ -865,23 +879,21 @@ final class HolePanel: NSPanel {
         isCollapsing = false
         let screen = NSScreen.screens.first { NSMouseInRect(point, $0.frame, false) } ?? NSScreen.main!
         let vf = screen.frame
-        let s = Self.size
-        var origin = NSPoint(x: point.x - s / 2, y: point.y - s / 2)
-        origin.x = min(max(origin.x, vf.minX - 40), vf.maxX - s + 40)
-        origin.y = min(max(origin.y, vf.minY - 40), vf.maxY - s + 40)
+        let w = Self.width, h = Self.height
+        var origin = NSPoint(x: point.x - w / 2, y: point.y - h / 2)
+        origin.x = min(max(origin.x, vf.minX - 30), vf.maxX - w + 30)
+        origin.y = min(max(origin.y, vf.minY - 30), vf.maxY - h + 30)
         let wasVisible = isVisible
         if !wasVisible { setFrameOrigin(origin) }
         orderFrontRegardless()
-        fx.startAnimations()
-        startOrbit()
         guard !wasVisible else { return }
 
         alphaValue = 1
         let open = CASpringAnimation(keyPath: "sublayerTransform")
-        open.fromValue = NSValue(caTransform3D: scaleTransform(0.05, rotate: 2))
+        open.fromValue = NSValue(caTransform3D: scaleTransform(0.05))
         open.toValue = NSValue(caTransform3D: CATransform3DIdentity)
-        open.damping = 14
-        open.stiffness = 180
+        open.damping = 12
+        open.stiffness = 200
         open.duration = open.settlingDuration
         root.layer?.sublayerTransform = CATransform3DIdentity
         root.layer?.add(open, forKey: "open")
@@ -894,14 +906,13 @@ final class HolePanel: NSPanel {
         CATransaction.setCompletionBlock { [weak self] in
             guard let self, self.isCollapsing else { return }
             self.orderOut(nil)
-            self.orbitTimer?.invalidate()
             self.root.layer?.removeAnimation(forKey: "close")
             self.root.layer?.sublayerTransform = CATransform3DIdentity
             self.isCollapsing = false
         }
         let close = CABasicAnimation(keyPath: "sublayerTransform")
-        close.toValue = NSValue(caTransform3D: scaleTransform(0.02, rotate: -3))
-        close.duration = 0.35
+        close.toValue = NSValue(caTransform3D: scaleTransform(0.02))
+        close.duration = 0.3
         close.timingFunction = CAMediaTimingFunction(name: .easeIn)
         close.fillMode = .forwards
         close.isRemovedOnCompletion = false
@@ -909,11 +920,8 @@ final class HolePanel: NSPanel {
         CATransaction.commit()
     }
 
-    /// True when a screen point is within the visible hole + orbit.
-    func contains(screenPoint p: NSPoint) -> Bool {
-        let c = NSPoint(x: frame.midX, y: frame.midY)
-        return hypot(p.x - c.x, p.y - c.y) < orbitR + 40
-    }
+    /// True when a screen point is over the basket window.
+    func contains(screenPoint p: NSPoint) -> Bool { frame.insetBy(dx: 30, dy: 30).contains(p) }
 
     @objc func copyPaths() {
         let items = Store.shared.items
@@ -934,7 +942,7 @@ final class HolePanel: NSPanel {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
-    private let panel = HolePanel()
+    private let panel = BasketPanel()
     private let shake = ShakeDetector()
     private var autoHideTimer: Timer?
 
@@ -942,7 +950,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Store.shared.wipe()
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        statusItem.button?.image = NSImage(systemSymbolName: "arrow.down.circle.fill", accessibilityDescription: "Toss")
+        statusItem.button?.image = NSImage(systemSymbolName: "cat.fill", accessibilityDescription: "Toss")
+            ?? NSImage(systemSymbolName: "arrow.down.circle.fill", accessibilityDescription: "Toss")
         statusItem.menu = buildMenu()
 
         shake.onShake = { [weak self] in self?.shakeDetected() }
