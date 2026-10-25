@@ -1,4 +1,4 @@
-// Style "Black Hole": files spiral into a sci-fi black hole and orbit it.
+// Style "Black Hole": a rip in space that opens from a point; files spiral in and orbit it.
 
 import Cocoa
 import QuickLookThumbnailing
@@ -146,6 +146,11 @@ final class BlackHoleFX: NSView {
     private let photonRing = CAShapeLayer()
     private let horizon = CAShapeLayer()
     private let emitter = CAEmitterLayer()
+    /// Everything outside the horizon, split around it: thrown out on open, sucked in on close.
+    private let back = CALayer()
+    private let front = CALayer()
+    private let flash = CAGradientLayer()
+    private let shockwave = CAShapeLayer()
     private var spinners: [(CALayer, Double)] = []
 
     static let hot: [CGColor] = [
@@ -217,6 +222,8 @@ final class BlackHoleFX: NSView {
     private func build() {
         guard let root = layer else { return }
         let w = bounds.width
+        back.frame = bounds
+        root.addSublayer(back)
 
         // Ambient glow
         glow.type = .radial
@@ -228,7 +235,7 @@ final class BlackHoleFX: NSView {
                        NSColor.clear].map(\.cgColor)
         glow.locations = [0.2, 0.5, 1]
         glow.opacity = 0.7
-        root.addSublayer(glow)
+        back.addSublayer(glow)
 
         // Lensed halo (the far side of the disk bent around the hole)
         let haloD = holeR * 3.6
@@ -238,12 +245,12 @@ final class BlackHoleFX: NSView {
         halo.endPoint = CGPoint(x: 0.5, y: 0)
         halo.colors = Self.hot
         halo.mask = ringMask(d: haloD, inner: holeR * 1.02, peak: 0.05)
-        root.addSublayer(halo)
+        back.addSublayer(halo)
         spinners.append((halo, 9))
 
         // Back half of the disk
         let diskD = w * 0.86
-        root.addSublayer(tiltedDisk(d: diskD, spin: 5))
+        back.addSublayer(tiltedDisk(d: diskD, spin: 5))
 
         // Infalling particles
         emitter.emitterPosition = c
@@ -264,7 +271,7 @@ final class BlackHoleFX: NSView {
         cell.color = NSColor(srgbRed: 1, green: 0.8, blue: 0.55, alpha: 0.9).cgColor
         cell.spin = 2
         emitter.emitterCells = [cell]
-        root.addSublayer(emitter)
+        back.addSublayer(emitter)
 
         // Event horizon + photon ring
         let circle = CGPath(ellipseIn: CGRect(x: -holeR, y: -holeR, width: holeR * 2, height: holeR * 2), transform: nil)
@@ -291,7 +298,6 @@ final class BlackHoleFX: NSView {
         root.addSublayer(photonRing)
 
         // Near half of the disk crosses in front of the hole
-        let front = CALayer()
         front.frame = bounds
         let lowerHalf = CALayer()
         lowerHalf.frame = CGRect(x: 0, y: 0, width: w, height: bounds.midY)
@@ -299,6 +305,134 @@ final class BlackHoleFX: NSView {
         front.mask = lowerHalf
         front.addSublayer(tiltedDisk(d: diskD, spin: 5))
         root.addSublayer(front)
+
+        // Shockwave of the rip and the white-hot spark at the singularity (hidden until used)
+        shockwave.path = circle
+        shockwave.position = c
+        shockwave.fillColor = nil
+        shockwave.strokeColor = NSColor(srgbRed: 1, green: 0.85, blue: 0.6, alpha: 1).cgColor
+        shockwave.lineWidth = 2
+        shockwave.opacity = 0
+        root.addSublayer(shockwave)
+
+        flash.type = .radial
+        centered(flash, holeR * 3)
+        flash.startPoint = CGPoint(x: 0.5, y: 0.5)
+        flash.endPoint = CGPoint(x: 1, y: 1)
+        flash.colors = [NSColor.white, NSColor(srgbRed: 1, green: 0.75, blue: 0.4, alpha: 0.8), .clear].map(\.cgColor)
+        flash.locations = [0, 0.3, 1]
+        flash.opacity = 0
+        root.addSublayer(flash)
+    }
+
+    // MARK: Rip open / seal
+
+    /// Opening: space tears from a single point inside. A spark, a slit that widens
+    /// into the round horizon, then a shockwave throws the disk and glow outward.
+    func tearOpen() {
+        reset()
+        let t0 = CACurrentMediaTime()
+
+        let spark = CAAnimationGroup()
+        spark.animations = [keyframes("opacity", [0, 1, 0], times: [0, 0.2, 1]),
+                            keyframes("transform.scale", [0.1, 0.5, 1.5], times: [0, 0.2, 1])]
+        spark.duration = 0.55
+        flash.add(spark, forKey: "tear")
+
+        for l in [horizon, photonRing] {
+            l.add(rip(open: true, begin: t0 + 0.04, duration: 0.5), forKey: "tear")
+        }
+
+        let wave = CAAnimationGroup()
+        let reach = bounds.width / 2 / holeR
+        wave.animations = [keyframes("transform.scale", [1, reach], times: [0, 1]),
+                           keyframes("opacity", [0.9, 0], times: [0, 1])]
+        wave.beginTime = t0 + 0.22
+        wave.duration = 0.5
+        wave.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        shockwave.add(wave, forKey: "tear")
+
+        for l in [back, front] {
+            let out = CAAnimationGroup()
+            out.animations = [keyframes("transform.scale", [0.3, 1], times: [0, 1]),
+                              keyframes("opacity", [0, 1], times: [0, 1])]
+            out.beginTime = t0 + 0.22
+            out.duration = 0.5
+            out.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.3, 1)
+            out.fillMode = .backwards
+            l.add(out, forKey: "tear")
+        }
+    }
+
+    /// Closing: the disk and glow fall into the hole, the horizon pinches into a slit,
+    /// then a point, and the rip seals with a last spark. Returns the total duration.
+    @discardableResult
+    func seal() -> CFTimeInterval {
+        reset()
+        let t0 = CACurrentMediaTime()
+
+        for l in [back, front] {
+            let fall = CAAnimationGroup()
+            fall.animations = [keyframes("transform.scale", [1, 0.15], times: [0, 1]),
+                               keyframes("opacity", [1, 0], times: [0, 1])]
+            fall.duration = 0.25
+            fall.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            hold(fall)
+            l.add(fall, forKey: "seal")
+        }
+
+        for l in [horizon, photonRing] {
+            let pinch = rip(open: false, begin: t0 + 0.12, duration: 0.25)
+            hold(pinch)
+            l.add(pinch, forKey: "seal")
+        }
+
+        let spark = CAAnimationGroup()
+        spark.animations = [keyframes("opacity", [0, 1, 0], times: [0, 0.3, 1]),
+                            keyframes("transform.scale", [0.05, 0.4, 0.02], times: [0, 0.3, 1])]
+        spark.beginTime = t0 + 0.33
+        spark.duration = 0.22
+        flash.add(spark, forKey: "seal")
+        return 0.55
+    }
+
+    /// Drops any held seal / tear state so the hole is whole again.
+    func reset() {
+        for l in [back, front, horizon, photonRing, flash, shockwave] {
+            l.removeAnimation(forKey: "seal")
+            l.removeAnimation(forKey: "tear")
+        }
+    }
+
+    /// The horizon as a rip: point -> thin horizontal slit -> round hole (or back).
+    private func rip(open: Bool, begin: CFTimeInterval, duration: CFTimeInterval) -> CAAnimationGroup {
+        var sx: [CGFloat] = [0.02, 0.85, 1], sy: [CGFloat] = [0.02, 0.05, 1]
+        var times: [Double] = [0, 0.35, 1]
+        if !open {
+            sx.reverse(); sy.reverse()
+            times = [0, 0.65, 1]
+        }
+        let g = CAAnimationGroup()
+        g.animations = [keyframes("transform.scale.x", sx, times: times),
+                        keyframes("transform.scale.y", sy, times: times)]
+        g.beginTime = begin
+        g.duration = duration
+        g.timingFunction = CAMediaTimingFunction(name: open ? .easeOut : .easeIn)
+        g.fillMode = .backwards
+        return g
+    }
+
+    private func keyframes(_ path: String, _ values: [CGFloat], times: [Double]) -> CAKeyframeAnimation {
+        let a = CAKeyframeAnimation(keyPath: path)
+        a.values = values
+        a.keyTimes = times.map { NSNumber(value: $0) }
+        return a
+    }
+
+    /// Keep the end state until `reset()`, so nothing pops back before the window hides.
+    private func hold(_ a: CAAnimation) {
+        a.fillMode = a.fillMode == .backwards ? .both : .forwards
+        a.isRemovedOnCompletion = false
     }
 
     func startAnimations() {
@@ -366,7 +500,6 @@ final class HolePanel: ShelfPanel {
     private var lastTick: TimeInterval = 0
 
     override var edgeSlack: CGFloat { 40 }
-    override var spin: (open: CGFloat, close: CGFloat) { (2, -3) }
 
     init() {
         let s = Self.size
@@ -500,7 +633,63 @@ final class HolePanel: ShelfPanel {
         startOrbit()
     }
 
-    override func didHide() { orbitTimer?.invalidate() }
+    override func didHide() {
+        orbitTimer?.invalidate()
+        fx.reset()
+        for v in satellites { v.layer?.removeAnimation(forKey: "seal") }
+    }
+
+    /// No spiral: a black hole is a rip in space, so it opens from a point inside
+    /// and seals back into it. The hole draws that itself; files and buttons follow.
+    override func openAnimation() -> CAAnimation {
+        fx.tearOpen()
+        let t0 = CACurrentMediaTime()
+        for v in satellites {
+            let a = CABasicAnimation(keyPath: "opacity")
+            a.fromValue = 0
+            a.toValue = 1
+            a.beginTime = t0 + 0.35
+            a.duration = 0.3
+            a.fillMode = .backwards
+            v.layer?.add(a, forKey: "tear")
+        }
+        return pause(0.75)
+    }
+
+    override func closeAnimation() -> CAAnimation {
+        let total = fx.seal()
+        // Files, count and buttons get pulled into the centre with everything else.
+        for v in satellites {
+            guard let l = v.layer else { continue }
+            let pull = CABasicAnimation(keyPath: "position")
+            pull.fromValue = NSValue(point: l.position)
+            pull.toValue = NSValue(point: NSPoint(x: l.position.x + center.x - v.frame.midX,
+                                                  y: l.position.y + center.y - v.frame.midY))
+            let fade = CABasicAnimation(keyPath: "opacity")
+            fade.fromValue = 1
+            fade.toValue = 0
+            let g = CAAnimationGroup()
+            g.animations = [pull, fade]
+            g.duration = 0.25
+            g.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            g.fillMode = .forwards
+            g.isRemovedOnCompletion = false
+            l.add(g, forKey: "seal")
+        }
+        return pause(total)
+    }
+
+    /// Everything in the window except the hole itself.
+    private var satellites: [NSView] { root.subviews.filter { $0 !== fx } }
+
+    /// A do-nothing animation that keeps the window's open / close running for `d` seconds.
+    private func pause(_ d: CFTimeInterval) -> CAAnimation {
+        let a = CABasicAnimation(keyPath: "sublayerTransform")
+        a.fromValue = NSValue(caTransform3D: CATransform3DIdentity)
+        a.toValue = NSValue(caTransform3D: CATransform3DIdentity)
+        a.duration = d
+        return a
+    }
 
     /// True when a screen point is within the visible hole + orbit.
     override func contains(screenPoint p: NSPoint) -> Bool {
