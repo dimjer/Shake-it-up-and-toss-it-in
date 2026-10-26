@@ -17,7 +17,7 @@ Dragging the macOS screenshot thumbnail straight into the terminal pastes a path
 
 ## 2. How it works (current behaviour)
 
-- **Summon:** shake the mouse left-right, with or without dragging. Detection polls the cursor (60 Hz while it moves, 10 Hz once it rests) and needs **no macOS permissions**. You can also use the menu-bar icon → *Show Shelf*.
+- **Summon:** shake the mouse back and forth in any direction (5 strokes of 45–55 px within 0.9 s; circles and arcs are ignored), with or without dragging. Detection polls the cursor (60 Hz while it moves, 10 Hz once it rests) and needs **no macOS permissions**. You can also use the menu-bar icon → *Show Shelf*.
 - **Styles:** *Black Hole* (files spiral in and orbit), *Kittens* (a pixel kitten per file, coat = file type; up to 4 sit in a small basket, the rest around it) and *Classic* (frosted macOS panel with an icon grid). Picked from the gear button or the menu bar; switching keeps the files and the window position.
 - **Drop:** anything dropped is copied into `~/.toss`: files, folders, file promises (Photos, browsers), raw image data saved as PNG, and text saved as TXT.
 - **Take one:** drag a single file (thumbnail / kitten / icon) out. Dragging **copies**: the file stays on the shelf, so it can go into several windows.

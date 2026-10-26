@@ -267,9 +267,10 @@ extension NSImage {
 final class ShakeDetector {
     var onShake: (() -> Void)?
     private var timer: Timer?
-    private var samples: [(t: TimeInterval, x: CGFloat)] = []
+    private var samples: [(t: TimeInterval, x: CGFloat, y: CGFloat)] = []
     private var lastFire: TimeInterval = 0
     private var lastX: CGFloat = .nan
+    private var lastY: CGFloat = .nan
     private var lastMove: TimeInterval = 0
 
     /// 60 Hz while the cursor moves; 10 Hz once it has rested, to save wakeups.
@@ -287,9 +288,9 @@ final class ShakeDetector {
 
     private func tick() {
         let now = ProcessInfo.processInfo.systemUptime
-        let x = NSEvent.mouseLocation.x
-        let moved = x != lastX
-        lastX = x
+        let loc = NSEvent.mouseLocation
+        let moved = loc.x != lastX || loc.y != lastY
+        lastX = loc.x; lastY = loc.y
         let interval = timer?.timeInterval ?? Self.fast
         if moved {
             lastMove = now
@@ -301,26 +302,42 @@ final class ShakeDetector {
         let buttonDown = NSEvent.pressedMouseButtons & 1 != 0
         if !buttonDown && !Settings.shakeWithoutDrag { samples.removeAll(); return }
 
-        while let first = samples.first, now - first.t > 0.7 { samples.removeFirst() }
+        while let first = samples.first, now - first.t > 0.9 { samples.removeFirst() }
         // A resting cursor adds nothing to the reversal count.
         guard moved else { return }
-        samples.append((now, x))
-        guard now - lastFire > 1.0, samples.count > 4 else { return }
+        samples.append((now, loc.x, loc.y))
+        guard now - lastFire > 1.0, samples.count > 6 else { return }
+
+        // Shake in any direction: find the main axis of the motion and count
+        // reversals along it. Circles and arcs have no main axis, so they don't count.
+        let n = CGFloat(samples.count)
+        let mx = samples.reduce(0) { $0 + $1.x } / n, my = samples.reduce(0) { $0 + $1.y } / n
+        var sxx: CGFloat = 0, syy: CGFloat = 0, sxy: CGFloat = 0
+        for p in samples {
+            let dx = p.x - mx, dy = p.y - my
+            sxx += dx * dx; syy += dy * dy; sxy += dx * dy
+        }
+        let half = (sxx + syy) / 2, root = ((sxx - syy) * (sxx - syy) / 4 + sxy * sxy).squareRoot()
+        let major = half + root, minor = half - root
+        guard major > minor * 6 else { return }
+        let angle = atan2(2 * sxy, sxx - syy) / 2
+        let ux = cos(angle), uy = sin(angle)
+        let along = samples.map { $0.x * ux + $0.y * uy }
 
         // Count direction reversals of at least `threshold` px.
-        let threshold: CGFloat = buttonDown ? 30 : 35
-        let needed = 3
+        let threshold: CGFloat = buttonDown ? 45 : 55
+        let needed = 4
         var reversals = 0
         var dir: CGFloat = 0
-        var extreme = samples[0].x
-        for s in samples.dropFirst() {
-            let d = s.x - extreme
+        var extreme = along[0]
+        for v in along.dropFirst() {
+            let d = v - extreme
             if dir == 0 {
-                if abs(d) >= threshold { dir = d > 0 ? 1 : -1; extreme = s.x }
+                if abs(d) >= threshold { dir = d > 0 ? 1 : -1; extreme = v }
             } else if d * dir > 0 {
-                extreme = s.x
+                extreme = v
             } else if abs(d) >= threshold {
-                reversals += 1; dir = -dir; extreme = s.x
+                reversals += 1; dir = -dir; extreme = v
             }
         }
         if reversals >= needed {
