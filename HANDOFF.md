@@ -6,6 +6,8 @@
 **Version / date:** 1.1 · handoff written 23 October 2026, updated 25 October 2026.
 **Repo:** https://github.com/dimjer/Toss (public, `main`; formerly `Shake-it-up-and-toss-it-in`, GitHub redirects the old URL)
 **Owner:** Dima · built with Claude Code.
+**Credits:** idea and the original prototype: [George Novak](https://georgenovak.com/). Product development, code written from scratch: [Dmytro Kartinnik](https://dkartinnikdesigner.com/).
+**Bundle ID:** `com.dkartinnikdesigner.toss`.
 
 ---
 

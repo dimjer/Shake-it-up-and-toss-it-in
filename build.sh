@@ -17,7 +17,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <dict>
   <key>CFBundleName</key><string>Toss</string>
   <key>CFBundleDisplayName</key><string>Toss</string>
-  <key>CFBundleIdentifier</key><string>nl.nidaros.toss</string>
+  <key>CFBundleIdentifier</key><string>com.dkartinnikdesigner.toss</string>
   <key>CFBundleExecutable</key><string>Toss</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>1.0</string>
